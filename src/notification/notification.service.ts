@@ -10,9 +10,9 @@ export class NotificationService {
   ) {}
 
   async createNotificationJob(data: any) {
-    await this.notificationQueue.add('notification:1', data, {
-      delay: 5000,
-    }); // Add a job to the queue
-    console.log('Job added to the queue');
+    // await this.notificationQueue.add('notification:1', data, {
+    //   delay: 5000,
+    // }); // Add a job to the queue
+    // console.log('Job added to the queue');
   }
 }

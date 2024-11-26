@@ -1,73 +1,272 @@
-<p align="center">
-  <a href="http://nestjs.com/" target="blank"><img src="https://nestjs.com/img/logo-small.svg" width="200" alt="Nest Logo" /></a>
-</p>
+# NestJS BullMQ Integration Guide
 
-[circleci-image]: https://img.shields.io/circleci/build/github/nestjs/nest/master?token=abc123def456
-[circleci-url]: https://circleci.com/gh/nestjs/nest
+This guide covers setting up and configuring BullMQ in a NestJS application with production-ready settings.
 
-  <p align="center">A progressive <a href="http://nodejs.org" target="_blank">Node.js</a> framework for building efficient and scalable server-side applications.</p>
-    <p align="center">
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/v/@nestjs/core.svg" alt="NPM Version" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/l/@nestjs/core.svg" alt="Package License" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/dm/@nestjs/common.svg" alt="NPM Downloads" /></a>
-<a href="https://circleci.com/gh/nestjs/nest" target="_blank"><img src="https://img.shields.io/circleci/build/github/nestjs/nest/master" alt="CircleCI" /></a>
-<a href="https://coveralls.io/github/nestjs/nest?branch=master" target="_blank"><img src="https://coveralls.io/repos/github/nestjs/nest/badge.svg?branch=master#9" alt="Coverage" /></a>
-<a href="https://discord.gg/G7Qnnhy" target="_blank"><img src="https://img.shields.io/badge/discord-online-brightgreen.svg" alt="Discord"/></a>
-<a href="https://opencollective.com/nest#backer" target="_blank"><img src="https://opencollective.com/nest/backers/badge.svg" alt="Backers on Open Collective" /></a>
-<a href="https://opencollective.com/nest#sponsor" target="_blank"><img src="https://opencollective.com/nest/sponsors/badge.svg" alt="Sponsors on Open Collective" /></a>
-  <a href="https://paypal.me/kamilmysliwiec" target="_blank"><img src="https://img.shields.io/badge/Donate-PayPal-ff3f59.svg"/></a>
-    <a href="https://opencollective.com/nest#sponsor"  target="_blank"><img src="https://img.shields.io/badge/Support%20us-Open%20Collective-41B883.svg" alt="Support us"></a>
-  <a href="https://twitter.com/nestframework" target="_blank"><img src="https://img.shields.io/twitter/follow/nestframework.svg?style=social&label=Follow"></a>
-</p>
-  <!--[![Backers on Open Collective](https://opencollective.com/nest/backers/badge.svg)](https://opencollective.com/nest#backer)
-  [![Sponsors on Open Collective](https://opencollective.com/nest/sponsors/badge.svg)](https://opencollective.com/nest#sponsor)-->
-
-## Description
-
-[Nest](https://github.com/nestjs/nest) framework TypeScript starter repository.
+## Table of Contents
+- [Installation](#installation)
+- [Basic Setup](#basic-setup)
+- [Production Configuration](#production-configuration)
+- [Queue Processor Implementation](#queue-processor-implementation)
+- [Common Patterns](#common-patterns)
+- [Best Practices](#best-practices)
 
 ## Installation
 
 ```bash
-$ npm install
+# Install required packages
+npm install @nestjs/bullmq bullmq
+
+# Install Redis if you haven't already
+# Using Docker
+docker run --name redis -p 6379:6379 -d redis
 ```
 
-## Running the app
+## Basic Setup
 
-```bash
-# development
-$ npm run start
+### 1. App Module Configuration
 
-# watch mode
-$ npm run start:dev
+```typescript
+// app.module.ts
+import { Module } from '@nestjs/common';
+import { BullModule } from '@nestjs/bullmq';
 
-# production mode
-$ npm run start:prod
+@Module({
+  imports: [
+    BullModule.forRoot({
+      defaultConnection: {
+        host: 'localhost',
+        port: 6379,
+      },
+    }),
+    // Your other modules...
+  ],
+})
+export class AppModule {}
 ```
 
-## Test
+### 2. Feature Module Setup
 
-```bash
-# unit tests
-$ npm run test
+```typescript
+// email/email.module.ts
+import { Module } from '@nestjs/common';
+import { BullModule } from '@nestjs/bullmq';
 
-# e2e tests
-$ npm run test:e2e
-
-# test coverage
-$ npm run test:cov
+@Module({
+  imports: [
+    BullModule.registerQueue({
+      name: 'email-queue',
+    }),
+  ],
+  providers: [EmailProcessor, EmailService],
+  controllers: [EmailController],
+})
+export class EmailModule {}
 ```
 
-## Support
+### 3. Basic Queue Processor
 
-Nest is an MIT-licensed open source project. It can grow thanks to the sponsors and support by the amazing backers. If you'd like to join them, please [read more here](https://docs.nestjs.com/support).
+```typescript
+// email/email.processor.ts
+import { Processor, WorkerHost } from '@nestjs/bullmq';
+import { Job } from 'bullmq';
 
-## Stay in touch
+@Processor('email-queue')
+export class EmailProcessor extends WorkerHost {
+  async process(job: Job<any, any, string>): Promise<any> {
+    // Process your job here
+    return { success: true };
+  }
+}
+```
 
-- Author - [Kamil Myśliwiec](https://kamilmysliwiec.com)
-- Website - [https://nestjs.com](https://nestjs.com/)
-- Twitter - [@nestframework](https://twitter.com/nestframework)
+## Production Configuration
 
-## License
+### Recommended Production Settings
 
-Nest is [MIT licensed](LICENSE).
+```typescript
+// app.module.ts
+BullModule.forRoot({
+  defaultConnection: {
+    host: process.env.REDIS_HOST || 'localhost',
+    port: parseInt(process.env.REDIS_PORT) || 6379,
+    password: process.env.REDIS_PASSWORD,
+    tls: process.env.REDIS_TLS === 'true' ? {} : undefined,
+    maxRetriesPerRequest: 3,
+    enableReadyCheck: true,
+    connectTimeout: 10000,
+  },
+  defaultJobOptions: {
+    // Cleanup settings
+    removeOnComplete: {
+      age: 24 * 3600,    // 24 hours
+      count: 1000,       // Keep max 1000 jobs
+    },
+    removeOnFail: {
+      age: 7 * 24 * 3600,  // 7 days
+      count: 5000,         // Keep max 5000 jobs
+    },
+    // Retry settings
+    attempts: 3,
+    backoff: {
+      type: 'exponential',
+      delay: 1000,
+    },
+    timeout: 5 * 60 * 1000,  // 5 minutes
+  },
+  settings: {
+    maxStalledCount: 2,
+    lockDuration: 30000,
+    stalledInterval: 30000,
+  },
+})
+```
+
+### Queue-Specific Settings
+
+```typescript
+// email/email.module.ts
+BullModule.registerQueue({
+  name: 'email-queue',
+  defaultJobOptions: {
+    attempts: 5,
+    timeout: 30000,
+    removeOnComplete: {
+      age: 3600,
+      count: 500,
+    },
+  },
+  processors: [{
+    concurrency: 5,
+    maxStalledCount: 3,
+  }],
+})
+```
+
+## Queue Processor Implementation
+
+### Production-Ready Processor
+
+```typescript
+@Processor('email-queue')
+export class EmailProcessor extends WorkerHost {
+  private readonly logger = new Logger(EmailProcessor.name);
+
+  async process(job: Job<any, any, string>): Promise<any> {
+    try {
+      await job.updateProgress(10);
+      const result = await this.sendEmail(job.data);
+      
+      return {
+        success: true,
+        messageId: result.messageId,
+        timestamp: new Date().toISOString(),
+      };
+
+    } catch (error) {
+      this.logger.error(
+        `Failed to process job ${job.id}: ${error.message}`,
+        error.stack
+      );
+      
+      if (this.isRetryableError(error)) {
+        throw error; // Will retry
+      }
+      
+      await job.moveToFailed({
+        message: error.message,
+        code: error.code,
+      }, false);
+    }
+  }
+}
+```
+
+## Common Patterns
+
+### Job Cleanup Options
+
+```typescript
+// Option 1: Boolean
+removeOnComplete: true    // Remove immediately
+removeOnFail: true       // Remove immediately
+
+// Option 2: Number
+removeOnComplete: 1000   // Keep last 1000 jobs
+removeOnFail: 1000      // Keep last 1000 failed jobs
+
+// Option 3: Age-based
+removeOnComplete: { 
+  age: 3600            // Remove after 1 hour
+}
+
+// Option 4: Count and age combined
+removeOnComplete: {
+  count: 1000,         // Keep max 1000 jobs
+  age: 3600           // That are no older than 1 hour
+}
+```
+
+### Adding Jobs
+
+```typescript
+// email.service.ts
+@Injectable()
+export class EmailService {
+  constructor(
+    @InjectQueue('email-queue') private emailQueue: Queue,
+  ) {}
+
+  async sendEmail(data: EmailData) {
+    const job = await this.emailQueue.add('send-email', data, {
+      priority: 1,
+      attempts: 3,
+      backoff: {
+        type: 'exponential',
+        delay: 1000,
+      },
+    });
+    return job;
+  }
+}
+```
+
+## Best Practices
+
+1. **Error Handling**
+    - Implement proper error logging
+    - Distinguish between retryable and non-retryable errors
+    - Set appropriate retry attempts and backoff strategies
+
+2. **Job Cleanup**
+    - Keep completed jobs for a reasonable time (e.g., 24 hours)
+    - Keep failed jobs longer for debugging (e.g., 7 days)
+    - Set maximum counts to prevent Redis memory issues
+
+3. **Monitoring**
+    - Monitor Redis memory usage
+    - Set up alerts for failed jobs
+    - Track job processing times
+    - Monitor queue lengths
+
+4. **Security**
+    - Use environment variables for sensitive data
+    - Enable Redis authentication
+    - Use TLS in production
+    - Set appropriate timeouts
+
+5. **Performance**
+    - Configure appropriate concurrency levels
+    - Set reasonable job timeouts
+    - Use job priorities when needed
+    - Implement rate limiting if required
+
+## Environment Variables
+
+```env
+REDIS_HOST=localhost
+REDIS_PORT=6379
+REDIS_PASSWORD=your-password
+REDIS_TLS=true
+```
+
+Remember to adjust these settings based on your specific requirements and workload patterns.

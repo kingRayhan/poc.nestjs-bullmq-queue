@@ -10,8 +10,8 @@ export class MailService {
   ) {}
 
   async createMailJob(data: any) {
-    await this.mailQueue.add('notification:1', data, {
-      delay: 5000,
+    await this.mailQueue.add(`poc-notification:${Date.now()}`, data, {
+
     }); // Add a job to the queue
     console.log('Mail queue job added to the queue');
   }
